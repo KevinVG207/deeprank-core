@@ -573,3 +573,188 @@ class QueryDataset:
 
     def __iter__(self) -> Iterator[Query]:
         return iter(self._queries)
+
+
+
+
+class ProteinProteinInterfaceChain1PriorityAtomicQuery(Query):
+    "A query that builds atom-based graphs, using the residues at a protein-protein interface, and always includes all atoms of chain 1."
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        pdb_path: str,
+        chain_id1: str,
+        chain_id2: str,
+        pssm_paths: Optional[Dict[str, str]] = None,
+        interface_distance_cutoff: Optional[float] = 5.5,
+        targets: Optional[Dict[str, float]] = None,
+    ):
+        """
+        Args:
+            pdb_path(str): the path to the pdb file
+            chain_id1(str): the pdb chain identifier of the first protein of interest
+            chain_id2(str): the pdb chain identifier of the second protein of interest
+            pssm_paths(dict(str,str), optional): the paths to the pssm files, per chain identifier
+            interface_distance_cutoff(float): max distance in Ångström between two interacting atoms of the two proteins
+            targets(dict, optional): named target values associated with this query
+        """
+
+        model_id = os.path.splitext(os.path.basename(pdb_path))[0]
+
+        Query.__init__(self, model_id, targets)
+
+        self._pdb_path = pdb_path
+
+        self._chain_id1 = chain_id1
+        self._chain_id2 = chain_id2
+
+        self._pssm_paths = pssm_paths
+
+        self._interface_distance_cutoff = interface_distance_cutoff
+
+    def get_query_id(self) -> str:
+        return f"atom-ppi-{self.model_id}:{self._chain_id1}-{self._chain_id2}"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(self, type(other))
+            and self.model_id == other.model_id
+            and {self._chain_id1, self._chain_id2}
+            == {other._chain_id1, other._chain_id2}
+        )
+
+    def __hash__(self) -> hash:
+        return hash((self.model_id, tuple(sorted([self._chain_id1, self._chain_id2]))))
+
+    def build_graph(self, feature_modules: List, include_hydrogens: bool = False) -> Graph:
+        """Builds the graph from the pdb structure.
+        Args:
+            feature_modules (list of modules): each must implement the add_features function.
+        """
+
+        # load pdb structure
+        structure = self._load_structure(self._pdb_path, self._pssm_paths, include_hydrogens)
+
+        # get the contact residues
+        interface_pairs = get_residue_contact_pairs(
+            self._pdb_path,
+            structure,
+            self._chain_id1,
+            self._chain_id2,
+            self._interface_distance_cutoff,
+        )
+        if len(interface_pairs) == 0:
+            raise ValueError("no interface residues found")
+
+        # Select all atoms of chain 1
+        atoms_selected = set([])
+        for residue in structure.get_chain(self._chain_id1).residues:
+            for atom in residue.atoms:
+                atoms_selected.add(atom)
+
+        # Select all contact atoms of chain 2
+        for _, residue2 in interface_pairs:
+            for atom in residue2.atoms:
+                atoms_selected.add(atom)
+        
+        # Convert selected set to list
+        atoms_selected = list(atoms_selected)
+
+        # build the graph
+        graph = build_atomic_graph(
+            atoms_selected, self.get_query_id(), self._interface_distance_cutoff
+        )
+
+        # add data to the graph
+        self._set_graph_targets(graph)
+
+        for feature_module in feature_modules:
+            feature_module.add_features(self._pdb_path, graph)
+
+        return graph
+
+
+class ProteinProteinAllAtomicQuery(Query):
+    "A query that builds atom-based graphs, using all atoms from both chains."
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        pdb_path: str,
+        chain_id1: str,
+        chain_id2: str,
+        pssm_paths: Optional[Dict[str, str]] = None,
+        interface_distance_cutoff: Optional[float] = 5.5,
+        targets: Optional[Dict[str, float]] = None,
+    ):
+        """
+        Args:
+            pdb_path(str): the path to the pdb file
+            chain_id1(str): the pdb chain identifier of the first protein of interest
+            chain_id2(str): the pdb chain identifier of the second protein of interest
+            pssm_paths(dict(str,str), optional): the paths to the pssm files, per chain identifier
+            interface_distance_cutoff(float): max distance in Ångström between two interacting atoms of the two proteins
+            targets(dict, optional): named target values associated with this query
+        """
+
+        model_id = os.path.splitext(os.path.basename(pdb_path))[0]
+
+        Query.__init__(self, model_id, targets)
+
+        self._pdb_path = pdb_path
+
+        self._chain_id1 = chain_id1
+        self._chain_id2 = chain_id2
+
+        self._pssm_paths = pssm_paths
+
+        self._interface_distance_cutoff = interface_distance_cutoff
+
+    def get_query_id(self) -> str:
+        return f"atom-ppi-{self.model_id}:{self._chain_id1}-{self._chain_id2}"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(self, type(other))
+            and self.model_id == other.model_id
+            and {self._chain_id1, self._chain_id2}
+            == {other._chain_id1, other._chain_id2}
+        )
+
+    def __hash__(self) -> hash:
+        return hash((self.model_id, tuple(sorted([self._chain_id1, self._chain_id2]))))
+
+    def build_graph(self, feature_modules: List, include_hydrogens: bool = False) -> Graph:
+        """Builds the graph from the pdb structure.
+        Args:
+            feature_modules (list of modules): each must implement the add_features function.
+        """
+
+        # load pdb structure
+        structure = self._load_structure(self._pdb_path, self._pssm_paths, include_hydrogens)
+
+        # Select all atoms of chain 1
+        atoms_selected = set([])
+        for residue in structure.get_chain(self._chain_id1).residues:
+            for atom in residue.atoms:
+                atoms_selected.add(atom)
+
+        # Select all atoms of chain 2
+        for residue in structure.get_chain(self._chain_id2).residues:
+            for atom in residue.atoms:
+                atoms_selected.add(atom)
+        
+        # Convert selected set to list
+        atoms_selected = list(atoms_selected)
+
+        # build the graph
+        graph = build_atomic_graph(
+            atoms_selected, self.get_query_id(), self._interface_distance_cutoff
+        )
+
+        # add data to the graph
+        self._set_graph_targets(graph)
+
+        for feature_module in feature_modules:
+            feature_module.add_features(self._pdb_path, graph)
+
+        return graph
